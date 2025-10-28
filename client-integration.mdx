@@ -1,0 +1,436 @@
+---
+title: "Client Integration"
+description: "Integrate Shit 402 payments into your application"
+---
+
+<Note>
+  **Experimental Demo Phase**
+
+  This implementation guide is for testing new features that will be integrated into the standard X402 protocol. All code and APIs are experimental and subject to change.
+</Note>
+
+## Overview
+
+This guide shows how to integrate Shit 402 payment functionality into your client application, enabling atomic payments for accessing protected resources.
+
+## Integration Options
+
+<Tabs>
+  <Tab title="Manual Implementation">
+    ### Installation
+
+    ```bash
+    npm install ethers axios
+    # or
+    yarn add ethers axios
+    ```
+
+    ### Basic Implementation
+
+```typescript
+import { ethers } from 'ethers';
+import axios from 'axios';
+
+class Shit402Client {
+  private wallet: ethers.Wallet;
+  private provider: ethers.Provider;
+
+  constructor(privateKey: string, rpcUrl?: string) {
+    this.provider = new ethers.JsonRpcProvider(
+      rpcUrl || 'https://bsc-dataseed.binance.org/'
+    );
+    this.wallet = new ethers.Wallet(privateKey, this.provider);
+  }
+
+  async requestResource(url: string): Promise<any> {
+    // Step 1: Try to access resource
+    const initialResponse = await this.makeRequest(url);
+
+    if (initialResponse.status !== 402) {
+      return initialResponse.data;
+    }
+
+    // Step 2: Handle payment requirement
+    const paymentDetails = initialResponse.data.accepts[0];
+
+    // Step 3: Create payment authorization
+    const paymentHeader = await this.createPaymentHeader(paymentDetails);
+
+    // Step 4: Retry with payment
+    const paidResponse = await this.makeRequest(url, paymentHeader);
+
+    return paidResponse.data;
+  }
+
+  private async makeRequest(url: string, paymentHeader?: string) {
+    const headers: any = {};
+
+    if (paymentHeader) {
+      headers['X-PAYMENT'] = paymentHeader;
+      headers['Access-Control-Expose-Headers'] = 'X-PAYMENT-RESPONSE';
+    }
+
+    return axios.get(url, {
+      headers,
+      validateStatus: (status) => status < 500
+    });
+  }
+
+  private async createPaymentHeader(paymentDetails: any): Promise<string> {
+    // Get current nonce from USD1 contract
+    const nonce = await this.getNonce();
+
+    // Create permit signature
+    const signature = await this.signPermit(
+      paymentDetails.payTo,
+      paymentDetails.maxAmountRequired,
+      nonce
+    );
+
+    // Build payment payload
+    const payload = {
+      x402Version: 1,
+      scheme: 'exact',
+      network: 'BSC',
+      payload: {
+        signature,
+        authorization: {
+          owner: this.wallet.address,
+          spender: paymentDetails.payTo,
+          value: paymentDetails.maxAmountRequired,
+          nonce: nonce.toString(),
+          deadline: Math.floor(Date.now() / 1000) + 3600
+        }
+      }
+    };
+
+    return Buffer.from(JSON.stringify(payload)).toString('base64');
+  }
+}
+```
+  </Tab>
+
+  <Tab title="SDK">
+    <Warning>
+      **Status: TODO**
+
+      The official Shit 402 SDK is currently under development. Once released, it will provide:
+
+      - Simple one-line payment integration
+      - Automatic retry and error handling
+      - Built-in wallet management
+      - TypeScript support
+      - React hooks and components
+      - Browser and Node.js compatibility
+
+      Check back soon or follow the [GitHub repository](https://github.com/yourusername/shit402) for updates.
+    </Warning>
+
+    ```bash
+    # Coming soon
+    npm install @shit402/sdk
+    ```
+
+    ```typescript
+    // Future SDK usage
+    import { Shit402SDK } from '@shit402/sdk';
+
+    const sdk = new Shit402SDK({
+      network: 'BSC',
+      privateKey: process.env.PRIVATE_KEY
+    });
+
+    // Simple payment flow
+    const result = await sdk.pay('https://example.com/resource');
+    ```
+  </Tab>
+</Tabs>
+
+## Detailed Implementation
+
+### Step 1: Handle 402 Responses
+
+```typescript
+interface X402Response {
+  x402Version: number;
+  accepts: PaymentOption[];
+}
+
+interface PaymentOption {
+  scheme: string;
+  network: string;
+  maxAmountRequired: string;
+  payTo: string;
+  asset: string;
+  maxTimeoutSeconds: number;
+}
+
+async function handlePaymentRequired(response: X402Response) {
+  // Check if we support the payment options
+  const supportedOption = response.accepts.find(
+    option => option.network === 'BSC' && option.scheme === 'exact'
+  );
+
+  if (!supportedOption) {
+    throw new Error('No supported payment method');
+  }
+
+  return supportedOption;
+}
+```
+
+### Step 2: Create EIP-712 Signatures
+
+```typescript
+async function signPermit(
+  spender: string,
+  value: string,
+  nonce: bigint
+): Promise<string> {
+  const domain = {
+    name: 'World Liberty Financial USD',
+    version: '1',
+    chainId: 56, // BSC Mainnet
+    verifyingContract: '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d' // USD1
+  };
+
+  const types = {
+    Permit: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' }
+    ]
+  };
+
+  const deadline = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+
+  const message = {
+    owner: wallet.address,
+    spender,
+    value,
+    nonce: nonce.toString(),
+    deadline: deadline.toString()
+  };
+
+  return await wallet.signTypedData(domain, types, message);
+}
+```
+
+### Step 3: Get Current Nonce
+
+```typescript
+const USD1_ABI = [
+  'function nonces(address owner) view returns (uint256)'
+];
+
+async function getNonce(): Promise<bigint> {
+  const usd1Contract = new ethers.Contract(
+    '0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d',
+    USD1_ABI,
+    provider
+  );
+
+  return await usd1Contract.nonces(wallet.address);
+}
+```
+
+## React Integration Example
+
+```jsx
+import { useState } from 'react';
+import { Shit402Client } from './shit402-client';
+
+function PaymentButton({ resourceUrl }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  const client = new Shit402Client(
+    process.env.REACT_APP_PRIVATE_KEY
+  );
+
+  const handlePayment = async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await client.requestResource(resourceUrl);
+      setResult(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={handlePayment} disabled={loading}>
+        {loading ? 'Processing Payment...' : 'Access Resource'}
+      </button>
+
+      {error && (
+        <div className="error">Error: {error}</div>
+      )}
+
+      {result && (
+        <div className="success">
+          Payment successful! Transaction: {result.transactionHash}
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Error Handling
+
+```typescript
+class PaymentError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public details?: any
+  ) {
+    super(message);
+  }
+}
+
+async function handlePaymentWithRetry(url: string, maxRetries = 3) {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await client.requestResource(url);
+    } catch (error) {
+      if (error.code === 'NONCE_EXPIRED' && i < maxRetries - 1) {
+        // Retry with fresh nonce
+        continue;
+      }
+
+      if (error.code === 'INSUFFICIENT_BALANCE') {
+        throw new PaymentError(
+          'Insufficient USD1 balance',
+          'INSUFFICIENT_BALANCE'
+        );
+      }
+
+      throw error;
+    }
+  }
+}
+```
+
+## Browser Wallet Integration
+
+For browser-based applications using MetaMask or other wallets:
+
+```typescript
+import { BrowserProvider } from 'ethers';
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    throw new Error('No wallet found');
+  }
+
+  const provider = new BrowserProvider(window.ethereum);
+  const signer = await provider.getSigner();
+
+  // Request BSC network
+  await window.ethereum.request({
+    method: 'wallet_switchEthereumChain',
+    params: [{ chainId: '0x38' }] // BSC Mainnet
+  });
+
+  return signer;
+}
+
+async function signPermitWithMetaMask(
+  signer: ethers.Signer,
+  paymentDetails: any
+) {
+  // Similar to signPermit but using signer instead of wallet
+  const signature = await signer.signTypedData(
+    domain,
+    types,
+    message
+  );
+
+  return signature;
+}
+```
+
+## Testing
+
+### Test Client Implementation
+
+```typescript
+// test-client.ts
+import { Shit402Client } from './shit402-client';
+
+async function testPayment() {
+  const client = new Shit402Client(
+    process.env.TEST_PRIVATE_KEY!
+  );
+
+  try {
+    // Test with a known 402-protected resource
+    const result = await client.requestResource(
+      'http://localhost:3008/mint?amount=1000000000000000000'
+    );
+
+    console.log('Payment successful:', result);
+    console.log('Transaction hash:', result.transactionHash);
+    console.log('View on BSCScan:',
+      `https://bscscan.com/tx/${result.transactionHash}`
+    );
+
+  } catch (error) {
+    console.error('Payment failed:', error);
+  }
+}
+
+// Run test
+testPayment();
+```
+
+## Best Practices
+
+<Card title="Implementation Guidelines" icon="check">
+  - Always validate payment amounts before signing
+  - Implement proper error handling and retry logic
+  - Store sensitive keys securely (never in code)
+  - Show clear payment confirmation to users
+  - Cache nonces to reduce RPC calls
+  - Implement timeout handling for long operations
+</Card>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Signature Mismatch">
+    Ensure domain parameters match exactly:
+    - Name: "World Liberty Financial USD"
+    - Version: "1"
+    - Chain ID: 56 (BSC Mainnet)
+    - Verifying Contract: 0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d
+  </Accordion>
+
+  <Accordion title="Nonce Already Used">
+    The nonce increments after each permit. Always fetch the current nonce before signing.
+  </Accordion>
+
+  <Accordion title="Deadline Expired">
+    Set reasonable deadlines (recommended: 1 hour). Shorter deadlines improve security but may cause issues with slow confirmations.
+  </Accordion>
+
+  <Accordion title="Wrong Network">
+    Ensure wallet is connected to BSC Mainnet (Chain ID: 56).
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+- Review the [Technical Documentation](/technical) for protocol details
+- Set up a [test environment](/quickstart) for development
+- Explore [example implementations](https://github.com/yourusername/shit402-examples)

@@ -1,0 +1,277 @@
+---
+title: "Become a Facilitator"
+description: "Guide to operating a Shit 402 payment facilitator node"
+---
+
+<Warning>
+  **No Revenue Currently Available**
+
+  Operating a facilitator currently generates NO fee revenue and will incur significant gas costs on BSC. This is an experimental phase for testing the protocol.
+</Warning>
+
+<Note>
+  **Experimental Demo Phase**
+
+  All content in this guide is for testing new features that will be integrated into the standard X402 protocol. Everything is subject to change and should be considered experimental.
+</Note>
+
+## Overview
+
+A Facilitator in the Shit 402 protocol handles all blockchain interactions for payment processing. As a Facilitator, you will:
+
+- Verify payment signatures from clients
+- Execute atomic on-chain transactions
+- Manage gas fees for all operations
+- Process callbacks after successful payments
+
+## Prerequisites
+
+<Card title="Requirements" icon="check-circle">
+  - BSC wallet with sufficient BNB for gas fees
+  - Node.js 18+ environment
+  - Understanding of EIP-712 and EIP-2612
+  - Ability to monitor and maintain services
+</Card>
+
+## Setup Guide
+
+### Step 1: Environment Configuration
+
+Create a `.env` file with your facilitator configuration:
+
+```env
+# Facilitator Configuration
+FACILITATOR_PRIVATE_KEY=your_private_key_here
+BSC_RPC_URL=https://bsc-dataseed.binance.org/
+
+# Contract Addresses
+RELAYER_CONTRACT=0x1E160d89dA5F5796e7B939A52f15870a3af358bb
+USD1_CONTRACT=0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d
+
+# Service Configuration
+FACILITATOR_PORT=3009
+LOG_LEVEL=info
+```
+
+### Step 2: Install Dependencies
+
+```bash
+npm install ethers axios express
+npm install -D typescript @types/node
+```
+
+### Step 3: Implement Facilitator Service
+
+Create the core facilitator service with verification and settlement methods:
+
+```typescript
+import { ethers } from 'ethers';
+
+class PaymentFacilitator {
+  private wallet: ethers.Wallet;
+  private relayerContract: ethers.Contract;
+
+  constructor(privateKey: string, rpcUrl: string) {
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    this.wallet = new ethers.Wallet(privateKey, provider);
+    this.relayerContract = new ethers.Contract(
+      RELAYER_CONTRACT,
+      RELAYER_ABI,
+      this.wallet
+    );
+  }
+
+  // Verify payment authorization
+  async verify(paymentData: PaymentPayload): Promise<VerificationResult> {
+    const { signature, authorization } = paymentData.payload;
+    const { owner, spender, value, deadline } = authorization;
+
+    // Check deadline
+    if (Date.now() / 1000 > Number(deadline)) {
+      return { valid: false, reason: 'Expired deadline' };
+    }
+
+    // Verify signature
+    const domain = {
+      name: 'World Liberty Financial USD',
+      version: '1',
+      chainId: 56,
+      verifyingContract: USD1_CONTRACT
+    };
+
+    const types = {
+      Permit: [
+        { name: 'owner', type: 'address' },
+        { name: 'spender', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' }
+      ]
+    };
+
+    const recovered = ethers.verifyTypedData(
+      domain,
+      types,
+      authorization,
+      signature
+    );
+
+    if (recovered.toLowerCase() !== owner.toLowerCase()) {
+      return { valid: false, reason: 'Invalid signature' };
+    }
+
+    return { valid: true, signer: owner };
+  }
+
+  // Settle payment on-chain with callback
+  async settle(
+    paymentData: PaymentPayload,
+    recipient: string,
+    callbackAddress: string
+  ): Promise<TransactionReceipt> {
+    const { signature, authorization } = paymentData.payload;
+    const sig = ethers.Signature.from(signature);
+
+    // Execute atomic payment and callback
+    const tx = await this.relayerContract.permitPayAndCallback(
+      authorization.owner,
+      authorization.value,
+      authorization.deadline,
+      sig.v,
+      sig.r,
+      sig.s,
+      recipient,
+      callbackAddress,
+      {
+        gasLimit: 500000,
+        gasPrice: ethers.parseUnits('3', 'gwei')
+      }
+    );
+
+    const receipt = await tx.wait();
+    return receipt;
+  }
+}
+```
+
+### Step 4: Gas Management
+
+Monitor and manage gas costs carefully:
+
+```typescript
+class GasManager {
+  async estimateSettlementGas(): Promise<bigint> {
+    // Typical gas costs:
+    // - Permit verification: ~50,000 gas
+    // - Token transfer: ~65,000 gas
+    // - Callback execution: ~50,000-200,000 gas
+    // Total: ~165,000-315,000 gas
+
+    return BigInt(350000); // Conservative estimate
+  }
+
+  async getCurrentGasPrice(): Promise<bigint> {
+    const provider = new ethers.JsonRpcProvider(BSC_RPC_URL);
+    const gasPrice = await provider.getFeeData();
+    return gasPrice.gasPrice || ethers.parseUnits('3', 'gwei');
+  }
+
+  async calculateCostInBNB(gasLimit: bigint): Promise<string> {
+    const gasPrice = await this.getCurrentGasPrice();
+    const costWei = gasLimit * gasPrice;
+    return ethers.formatEther(costWei);
+  }
+}
+```
+
+## Integration with Content Servers
+
+Content servers will call your facilitator service for payment processing:
+
+```typescript
+// Server calls your facilitator
+const facilitatorResponse = await axios.post('https://your-facilitator.com/verify', {
+  paymentData: paymentPayload
+});
+
+if (facilitatorResponse.data.valid) {
+  // Server requests settlement
+  await axios.post('https://your-facilitator.com/settle', {
+    paymentData: paymentPayload,
+    recipient: serverWallet,
+    callback: callbackContract
+  });
+}
+```
+
+## Monitoring and Maintenance
+
+### Health Checks
+
+Implement health monitoring endpoints:
+
+```typescript
+app.get('/health', async (req, res) => {
+  const balance = await wallet.getBalance();
+  const blockNumber = await provider.getBlockNumber();
+
+  res.json({
+    status: 'healthy',
+    balance: ethers.formatEther(balance),
+    blockNumber,
+    address: wallet.address
+  });
+});
+```
+
+### Error Handling
+
+Handle common errors gracefully:
+
+```typescript
+try {
+  const receipt = await facilitator.settle(payment, recipient, callback);
+} catch (error) {
+  if (error.code === 'INSUFFICIENT_FUNDS') {
+    // Wallet needs more BNB for gas
+  } else if (error.code === 'NONCE_EXPIRED') {
+    // Permit nonce already used
+  } else if (error.code === 'UNPREDICTABLE_GAS_LIMIT') {
+    // Transaction will fail, don't send
+  }
+}
+```
+
+## Cost Analysis
+
+<Warning>
+  **Current Costs (No Revenue)**
+
+  As a facilitator, you will pay for all gas costs with no fee revenue:
+
+  - Average transaction: 250,000 gas
+  - At 0.1 gwei gas price: 0.000025 BNB per transaction
+
+  **You will lose money on every transaction in the current experimental phase.**
+</Warning>
+
+## Future Roadmap
+
+In future versions, facilitators will be able to:
+
+- Charge processing fees from payments
+- Participate in decentralized facilitator networks
+- Earn rewards for reliable service
+- Access advanced routing and optimization features
+
+## Security Considerations
+
+<Card title="Security Best Practices" icon="shield">
+  - Never expose private keys in code or logs
+  - Implement rate limiting on all endpoints
+  - Monitor for unusual transaction patterns
+  - Keep minimum necessary BNB balance
+  - Use hardware wallets for production
+</Card>
+
+Remember: This is an experimental protocol. Only participate if you understand the risks and costs involved.

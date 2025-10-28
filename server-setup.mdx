@@ -1,0 +1,134 @@
+---
+title: "Server Setup"
+description: "Set up a content server with Shit 402 payment requirements"
+---
+
+<Note>
+  **Experimental Demo Phase**
+
+  This guide is for testing new features that will be integrated into the standard X402 protocol. All implementations are experimental and subject to change.
+</Note>
+
+## Overview
+
+Content servers in the Shit 402 protocol are responsible for:
+
+- Serving protected resources
+- Implementing HTTP 402 Payment Required responses
+- Integrating with Facilitators for payment verification
+- Delivering content after successful payment
+
+<Warning>
+  **Implementation Status: TODO**
+
+  Server implementation guide is currently being developed. The server component operates independently from the Facilitator and handles content delivery rather than blockchain operations.
+</Warning>
+
+## Architecture Overview
+
+The server operates as a separate entity from the Facilitator:
+
+<Steps>
+  <Step title="Initial Request">
+    Client → Server: Request protected resource
+  </Step>
+  <Step title="Payment Required">
+    Server → Client: Return 402 with payment requirements
+  </Step>
+  <Step title="Request with Payment">
+    Client → Server: Retry request with X-PAYMENT header
+  </Step>
+  <Step title="Verify Payment">
+    Server → Facilitator: Send payment data for verification
+  </Step>
+  <Step title="Verification Result">
+    Facilitator → Server: Return verification status
+  </Step>
+  <Step title="Generate callback">
+    Server: Generate callback params
+  </Step>
+  <Step title="Request Settlement">
+    Server → Facilitator: Request on-chain settlement with callback params
+  </Step>
+  <Step title="Blockchain Transaction">
+    Facilitator → Blockchain: Execute atomic payment and callback
+  </Step>
+  <Step title="Content Delivery">
+    Server → Client: Deliver protected content
+  </Step>
+</Steps>
+
+## Key Responsibilities
+
+### 1. Resource Protection
+
+```typescript
+// TODO: Implementation example
+app.get('/protected-resource', async (req, res) => {
+  const paymentHeader = req.headers['x-payment'];
+
+  if (!paymentHeader) {
+    // Return 402 with payment requirements
+    return res.status(402).json({
+      x402Version: 1,
+      accepts: [{
+        // Payment configuration
+      }]
+    });
+  }
+
+  // Process payment...
+});
+```
+
+### 2. Facilitator Integration
+
+```typescript
+// TODO: Implementation example
+class FacilitatorClient {
+  async verifyPayment(paymentData: any) {
+    // Call facilitator's verify endpoint
+  }
+
+  async requestSettlement(paymentData: any, recipient: string) {
+    // Call facilitator's settle endpoint
+  }
+}
+```
+
+### 3. Content Delivery
+
+After successful payment verification and settlement:
+
+```typescript
+// TODO: Implementation example
+if (paymentVerified && settlementComplete) {
+  // Deliver protected content
+  res.json({
+    success: true,
+    content: protectedData,
+    transactionHash: settlementTx
+  });
+}
+```
+
+## Configuration
+
+Servers need to configure:
+
+- Facilitator endpoints for payment processing
+- Payment requirements for each resource
+- Recipient wallet addresses
+- Callback contract addresses (if applicable)
+
+## Coming Soon
+
+Detailed implementation guide including:
+
+- Complete code examples
+- Facilitator integration patterns
+- Resource protection strategies
+- Payment configuration options
+- Error handling and retry logic
+- Performance optimization tips
+- Security best practices

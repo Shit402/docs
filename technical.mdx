@@ -1,0 +1,214 @@
+---
+title: "Technical Documentation"
+description: "In-depth technical details of the Shit 402 protocol implementation"
+---
+
+## Protocol Overview
+
+Shit 402 implements an atomic payment-callback protocol using a combination of HTTP 402 Payment Required status codes, EIP-712 typed data signing, and EIP-2612 permit functionality. The protocol ensures that payment settlement and business logic execution occur atomically within a single blockchain transaction.
+
+## Core Technologies
+
+### EIP-2612: Permit Extension for ERC-20
+
+The protocol leverages EIP-2612, which adds a `permit` function to ERC-20 tokens, allowing approvals via signatures instead of transactions.
+
+```solidity
+function permit(
+    address owner,
+    address spender,
+    uint256 value,
+    uint256 deadline,
+    uint8 v,
+    bytes32 r,
+    bytes32 s
+) external
+```
+
+This enables gasless approvals where users sign a message authorizing a spender without executing an on-chain transaction.
+
+### EIP-712: Typed Data Signing
+
+Structured data signing provides enhanced security and user experience:
+
+```javascript
+const domain = {
+  name: 'World Liberty Financial USD',
+  version: '1',
+  chainId: 56,
+  verifyingContract: usd1Contract
+};
+
+const types = {
+  Permit: [
+    { name: 'owner', type: 'address' },
+    { name: 'spender', type: 'address' },
+    { name: 'value', type: 'uint256' },
+    { name: 'nonce', type: 'uint256' },
+    { name: 'deadline', type: 'uint256' }
+  ]
+};
+```
+
+## Architecture Components
+
+The Shit 402 protocol consists of three main components operating independently:
+
+### 1. Content Server
+
+The server hosting protected resources that require payment:
+
+- Implements HTTP 402 Payment Required responses
+- Receives payment authorization from clients
+- Delegates payment verification to Facilitator
+- Provides resources after successful payment
+
+**Key Responsibilities:**
+- Resource access control
+- Payment requirement specification
+- Integration with Facilitator for payment processing
+
+### 2. Facilitator
+
+The payment processor that handles blockchain interactions:
+
+- Verifies payment signatures and authorization
+- Executes on-chain atomic transactions
+- Manages the relayer smart contract
+- Handles callbacks after successful payments
+
+**Key Responsibilities:**
+- Signature verification (`verify()` method)
+- On-chain settlement (`settle()` method)
+- Gas fee management
+- Contract interaction
+
+<Warning>
+  **Important:** Facilitator and Server are operated by different entities. The Facilitator handles all blockchain operations while the Server focuses on content delivery.
+</Warning>
+
+### 3. Client
+
+The end-user application requesting paid resources:
+
+- Creates EIP-712 permit signatures
+- Sends payment authorization headers
+- Handles 402 responses and retry logic
+
+**Key Responsibilities:**
+- Wallet management
+- Signature generation
+- Payment header creation
+- Request retry with payment
+
+### 4. Smart Contract (Relayer)
+
+The on-chain component ensuring atomic execution:
+
+```solidity
+contract PaymentRelayer {
+    function permitPayAndCallback(
+        address owner,
+        uint256 amount,
+        uint256 permitDeadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s,
+        address recipient,
+        address callback
+    ) external {
+        // Atomic operations:
+        // 1. permit() - Get spending approval via signature
+        // 2. transferFrom() - Transfer payment
+        // 3. callback() - Execute business logic
+    }
+}
+```
+
+## Payment Flow Sequence
+
+<Steps>
+  <Step title="Initial Request">
+    Client requests resource without payment header
+  </Step>
+  <Step title="402 Response">
+    Server returns HTTP 402 with payment requirements
+  </Step>
+  <Step title="Sign Permit">
+    Client creates EIP-712 signature for permit
+  </Step>
+  <Step title="Retry with Payment">
+    Client sends request with X-PAYMENT header
+  </Step>
+  <Step title="Verify Signature">
+    Server validates the permit signature
+  </Step>
+  <Step title="Execute Contract">
+    Server calls permitPayAndCallback() on-chain
+  </Step>
+  <Step title="Atomic Operations">
+    Contract atomically executes:
+    - permit() for approval
+    - transferFrom() for payment
+    - callback() for business logic
+  </Step>
+  <Step title="Success Response">
+    Server returns successful result to client
+  </Step>
+</Steps>
+
+## Security Considerations
+
+### Signature Verification
+
+- All signatures are verified both off-chain (server) and on-chain (contract)
+- Nonces prevent replay attacks
+- Deadlines ensure time-bound validity
+
+### Atomic Guarantees
+
+The smart contract ensures atomicity through Solidity's automatic revert mechanism:
+
+1. If permit fails → entire transaction reverts
+2. If transfer fails → entire transaction reverts
+3. If callback fails → entire transaction reverts
+
+### Gas Optimization
+
+- Single transaction for approval + transfer + callback
+- No separate approval transaction required
+- Batch operations possible through multicall patterns
+
+## Protocol Benefits
+
+### For Users
+- No separate approval transactions
+- Clear payment authorization prompts
+- Atomic payment guarantees
+
+### For Developers
+- Simple integration with existing HTTP infrastructure
+- Standard error handling patterns
+- Flexible callback mechanisms
+
+### For Facilitators
+- Automated payment processing
+- Reduced operational complexity
+- Future fee revenue opportunities
+
+## Current Status
+
+<Warning>
+  **Experimental Phase**
+
+  Shit 402 is currently in experimental/demo phase for testing new features that will be integrated into the standard X402 protocol. All implementations should be considered experimental and subject to change.
+</Warning>
+
+## Contract Addresses (BSC)
+
+<Note>
+  **Current Deployment:**
+  - Relayer Contract: `0x1E160d89dA5F5796e7B939A52f15870a3af358bb`
+  - USD1 Token: `0x8d0D000Ee44948FC98c9B98A4FA4921476f08B0d`
+  - Network: BSC Mainnet (Chain ID: 56)
+</Note>
